@@ -1,0 +1,296 @@
+{% if site.data.theme.map-child-objects == true %}
+{%- assign items = site.data[site.metadata] | where_exp: 'item','item.objectid' -%}
+{% else %}
+{%- assign items = site.data[site.metadata] | where_exp: 'item','item.objectid and item.parentid == nil' -%}
+{% endif %}
+{%- assign items = items | where_exp: 'item','item.latitude != nil and item.longitude != nil' -%}
+{%- assign fields = site.data.config-map -%}
+<!-- load leaflet dependencies -->
+<script src="{{ '/assets/lib/leaflet/leaflet.js' | relative_url }}"></script>
+<script src="{{ '/assets/lib/leaflet/Leaflet.fullscreen.min.js' | relative_url }}"></script>
+{% if site.data.theme.map-search == true %}<script src="{{ '/assets/lib/leaflet/fuse.min.js' | relative_url }}"></script>
+<script src="{{ '/assets/lib/leaflet/leaflet.fusesearch.js' | relative_url }}"></script>{% endif %}
+
+<!-- Load PIXI.js and PixiOverlay -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pixi.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet-pixi-overlay@1.9.4/L.PixiOverlay.min.js"></script>
+
+<script>
+(async function(){
+    /* mobile detection for performance optimizations */
+    var isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+    /* add collection map data */
+    var geodata = { "type": "FeatureCollection", "features": [ 
+    {% for item in items %}
+    { "type":"Feature", "geometry":{ "type":"Point", "coordinates":[{{ item.longitude | strip }},{{ item.latitude | strip }}] }, "properties":
+    { 
+        {% for f in fields %}{% if item[f.field] %}{{ f.field | escape | jsonify }}:{{ item[f.field] | strip | escape | jsonify }}, {%- endif -%}{%- endfor -%}
+        {% if item.image_thumb %}"img": {{ item.image_thumb | relative_url | jsonify }},{% endif %}
+        {% if item.display_template %}"template": {{ item.display_template | escape | jsonify }}, {%- endif -%}
+        {% if item.format %}"format": {{ item.format | escape | jsonify }}, {%- endif -%}
+        {% if item.image_alt_text %}"alt": {{ item.image_alt_text | escape | jsonify }}, {%- endif -%}
+        {% if item.parentid %}"parent": {{ item.parentid | jsonify }}, {%- endif -%}
+        "title": {{ item.title | escape | jsonify }},
+        "id": {{ item.objectid | jsonify }} 
+    } }{% unless forloop.last %}, {% endunless %}{% endfor %}
+    ]};
+
+    /* check for url parameters and setup initial view options */ 
+    let url = new URL(window.location);
+    const locationSearchParams = url.searchParams.get('location');
+    var mapCenter = locationSearchParams ? locationSearchParams.split(',') : [{{ site.data.theme.latitude | default: 46.727485 }}, {{ site.data.theme.longitude | default: -117.014185 }}];
+    var mapZoom = locationSearchParams ? 16 : {{ site.data.theme.zoom-level | default: 5 }};
+    var markerFilter = url.searchParams.get('marker') ? url.searchParams.get('marker') : "";
+
+    /* init map with mobile optimizations */
+    var mapOptions = { preferCanvas: true }; // Use canvas for better mobile performance
+    if (isMobile) {
+        mapOptions.zoomAnimation = false;
+        mapOptions.fadeAnimation = false;
+        mapOptions.markerZoomAnimation = false;
+    }
+    var map = L.map('map', mapOptions);
+
+    /* add map layer options */
+    var Esri_WorldStreetMap = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, 2012'
+    });
+    var Esri_NatGeoWorldMap = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Tiles &copy; Esri &mdash; National Geographic, Esri, DeLorme, NAVTEQ, UNEP-WCMC, USGS, NASA, ESA, METI, NRCAN, GEBCO, NOAA, iPC',
+        maxZoom: 16
+    });
+    var Esri_WorldImagery = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+    });
+    var OpenStreetMap_Mapnik = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    });
+    
+    /* add base map switcher */
+    var baseMaps = {
+        "Esri World StreetMap": Esri_WorldStreetMap,
+        "Esri National Geo": Esri_NatGeoWorldMap,
+        "Esri Imagery": Esri_WorldImagery,
+        "Open Street Map": OpenStreetMap_Mapnik
+    };
+    L.control.layers(baseMaps).addTo(map);
+    /* load base map */
+    {{ site.data.theme.map-base | default: 'Esri_WorldStreetMap' }}.addTo(map);
+
+    /* add fullscreen control */ 
+    map.addControl(new L.Control.Fullscreen());
+
+    /* get icons function */ 
+    {% include helpers/get-icon.js %}
+
+    /* create marker texture using canvas for better performance */
+    function createMarkerTexture() {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 25;
+        canvas.height = 41;
+        
+        // Draw a simple marker shape
+        ctx.fillStyle = '#ff7800';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 2;
+        
+        // Draw marker shape
+        ctx.beginPath();
+        ctx.arc(12.5, 12.5, 10, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Draw pointer
+        ctx.beginPath();
+        ctx.moveTo(12.5, 25);
+        ctx.lineTo(7.5, 15);
+        ctx.lineTo(17.5, 15);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        
+        return PIXI.Texture.from(canvas);
+    }
+
+    /* create PIXI container and texture */
+    const pixiContainer = new PIXI.Container();
+    const markerTexture = createMarkerTexture();
+    
+    /* store marker sprites and their associated data */
+    var markerSprites = [];
+    var markerData = new Map(); // Maps sprite to feature data
+
+    /* popup functionality */
+    var currentPopup = null;
+    
+    function createPopupContent(feature) {
+        var itemHref = `{{ '/items/' | relative_url }}${ feature.properties.parent ? feature.properties.parent + ".html#" + feature.properties.id : feature.properties.id + ".html"}`;
+        var imgAlt = feature.properties.alt ? feature.properties.alt : feature.properties.title;
+        var thumbImg;
+        
+        if (feature.properties.img) {
+            thumbImg = '<img class="map-thumb" src="' + feature.properties.img + '" alt="' + imgAlt + '">';
+        } else {
+            thumbImg = getIcon(feature.properties.template, feature.properties.format, "thumb");
+        }
+        
+        var popupTemplate = '<h2 class="h4"><a class="text-dark" href="' + itemHref + '">' +
+            feature.properties.title + '</a></h2><div class="text-center"><a href="' + itemHref + 
+            '" >' + thumbImg + '</a></div><p>';
+            
+        {% for f in fields %}{% if f.display_name %}
+        if (feature.properties[{{ f.field | escape | jsonify }}]) {
+            popupTemplate += '<strong>{{ f.display_name }}:</strong> ' + feature.properties[{{ f.field | escape | jsonify }}] + '<br>'; 
+        }
+        {% endif %}{% endfor %}
+        
+        popupTemplate += '</p><div class="text-center"><a class="btn btn-light" href="' + itemHref + '" >View Item</a></div>';
+        return popupTemplate;
+    }
+
+    /* PIXI draw callback function */
+    let firstDraw = true;
+    let prevZoom = null;
+    
+    const pixiOverlay = L.pixiOverlay(function(utils) {
+        const zoom = utils.getMap().getZoom();
+        const container = utils.getContainer();
+        const renderer = utils.getRenderer();
+        const project = utils.latLngToLayerPoint;
+        const scale = utils.getScale();
+        
+        if (firstDraw) {
+            // Create all markers on first draw
+            geodata.features.forEach(function(feature, index) {
+                const coords = feature.geometry.coordinates;
+                const latLng = [coords[1], coords[0]];
+                const pixelCoords = project(latLng);
+                
+                const markerSprite = new PIXI.Sprite(markerTexture);
+                markerSprite.anchor.set(0.5, 1);
+                markerSprite.x = pixelCoords.x;
+                markerSprite.y = pixelCoords.y;
+                markerSprite.scale.set(1 / scale);
+                
+                // Make marker interactive
+                markerSprite.interactive = true;
+                markerSprite.cursor = 'pointer';
+                
+                // Store feature data
+                markerData.set(markerSprite, feature);
+                
+                container.addChild(markerSprite);
+                markerSprites.push(markerSprite);
+            });
+            
+            // Add click handler for markers
+            container.on('click', function(event) {
+                const clickedSprite = event.target;
+                const feature = markerData.get(clickedSprite);
+                
+                if (feature) {
+                    const coords = feature.geometry.coordinates;
+                    const latLng = [coords[1], coords[0]];
+                    
+                    if (currentPopup) {
+                        map.closePopup(currentPopup);
+                    }
+                    
+                    currentPopup = L.popup()
+                        .setLatLng(latLng)
+                        .setContent(createPopupContent(feature))
+                        .openOn(map);
+                }
+            });
+            
+            firstDraw = false;
+            prevZoom = zoom;
+        } else if (prevZoom !== zoom) {
+            // Update marker scales on zoom change
+            const newScale = 1 / scale;
+            markerSprites.forEach(function(sprite) {
+                sprite.scale.set(newScale);
+            });
+            prevZoom = zoom;
+        }
+        
+        renderer.render(container);
+    }, pixiContainer, {
+        // Mobile-specific optimizations
+        doubleBuffering: isMobile, // Prevent flickering on iOS
+        forceCanvas: false, // Use WebGL when available
+        autoPreventDefault: false, // Let events flow to leaflet
+        destroyInteractionManager: false, // Keep interactions
+        shouldRedrawOnMove: function() { return false; }, // Only redraw on zoom
+        resolution: isMobile ? 1 : (window.devicePixelRatio || 1) // Optimize resolution for mobile
+    });
+
+    /* add PIXI overlay to map */
+    pixiOverlay.addTo(map);
+
+    {% if site.data.theme.map-search == true %}
+    /* add search functionality */
+    var options = {
+        title: 'Search Map Items',
+        placeholder: 'Search map items...',
+        threshold: {{ site.data.theme.map-search-fuzziness | default: 0.35 }},
+        showResultFct: function(feature, container) {
+            var result = `<strong>${feature.properties.title}</strong><br>`;
+            {% for f in fields %}
+            if(feature.properties[{{ f.field | jsonify }}]) { result += feature.properties[{{ f.field | jsonify }}] + `<br>`; }
+            {% endfor %}
+            container.innerHTML = result;
+        }
+    };
+    var searchCtrl = L.control.fuseSearch(options);
+    searchCtrl.addTo(map);
+    searchCtrl.indexFeatures(geodata.features, {{ fields | where: 'search','true' | map: 'field' | unshift: 'title' | jsonify }});
+    {% endif %}
+
+    {% if site.data.theme.auto-center-map == true %}
+    /* auto center the map if no location specified */
+    if (locationSearchParams === null) {
+        if (geodata.features.length > 0) {
+            const bounds = L.latLngBounds();
+            geodata.features.forEach(function(feature) {
+                const coords = feature.geometry.coordinates;
+                bounds.extend([coords[1], coords[0]]);
+            });
+            map.fitBounds(bounds);
+        } else {
+            map.setView(mapCenter, mapZoom);
+        }
+    } else {
+        map.setView(mapCenter, mapZoom);
+    }
+    {% else %}
+    map.setView(mapCenter, mapZoom);
+    {% endif %}
+    
+    /* show popup if id in URL query */ 
+    if (markerFilter != "") {
+        setTimeout(function() {
+            const targetFeature = geodata.features.find(f => f.properties.id === markerFilter);
+            if (targetFeature) {
+                const coords = targetFeature.geometry.coordinates;
+                const latLng = [coords[1], coords[0]];
+                
+                if (currentPopup) {
+                    map.closePopup(currentPopup);
+                }
+                
+                currentPopup = L.popup()
+                    .setLatLng(latLng)
+                    .setContent(createPopupContent(targetFeature))
+                    .openOn(map);
+                
+                map.setView(latLng, Math.max(map.getZoom(), 12));
+            }
+        }, 500);
+    }
+
+})();
+</script>
