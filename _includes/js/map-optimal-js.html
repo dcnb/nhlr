@@ -15,8 +15,10 @@
 
 <script>
 (function(){
-    /* mobile detection for performance optimizations */
+    /* enhanced mobile detection for performance optimizations */
     var isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    var isTablet = /iPad/i.test(navigator.userAgent);
+    var isLowEndDevice = isMobile && !isTablet && window.devicePixelRatio <= 1.5;
 
     /* add collection map data */
     var geodata = { "type": "FeatureCollection", "features": [ 
@@ -45,13 +47,31 @@
     var mapZoom = locationSearchParams ? 16 : {{ site.data.theme.zoom-level | default: 5 }};
     var markerFilter = url.searchParams.get('marker') ? url.searchParams.get('marker') : "";
 
-    /* init map with mobile optimizations */
-    var mapOptions = {};
+    /* init map with enhanced mobile optimizations */
+    var mapOptions = {
+        // Disable all animations on mobile for better performance
+        zoomAnimation: !isMobile,
+        fadeAnimation: !isMobile,
+        markerZoomAnimation: !isMobile,
+        // Additional mobile-specific optimizations
+        preferCanvas: isMobile, // Use canvas renderer on mobile for better performance
+        worldCopyJump: false, // Disable world copy jumping
+        maxBoundsViscosity: isMobile ? 0.0 : 1.0, // Reduce bounce effect on mobile
+        // Reduce tile loading for mobile
+        keepBuffer: isMobile ? 1 : 2, // Reduce tile buffer on mobile
+        // Optimize touch interactions
+        tap: isMobile,
+        touchZoom: isMobile ? 'center' : true,
+        bounceAtZoomLimits: !isMobile
+    };
+    
     if (isMobile) {
-        mapOptions.zoomAnimation = false;
-        mapOptions.fadeAnimation = false;
-        mapOptions.markerZoomAnimation = false;
+        // Further reduce animations and effects for mobile
+        mapOptions.zoomSnap = 1; // Snap to integer zoom levels
+        mapOptions.zoomDelta = 1; // Larger zoom steps
+        mapOptions.wheelPxPerZoomLevel = 120; // Faster zoom with wheel
     }
+    
     var map = L.map('map', mapOptions);
 
     /* add map layer options */
@@ -102,13 +122,22 @@
     map.addControl(new L.Control.Fullscreen());
 
     {% if site.data.theme.map-cluster == true %}
-    /* create cluster group with mobile optimizations */
-    var clusterRadius = {{ site.data.theme.map-cluster-radius | default: 15 }};
-    var markers = L.markerClusterGroup({ 
+    /* enhanced cluster group with mobile optimizations */
+    var clusterRadius = isMobile ? 
+        {{ site.data.theme.map-cluster-radius | default: 15 }} * 1.5 : // Larger clusters on mobile
+        {{ site.data.theme.map-cluster-radius | default: 15 }};
+    
+    var clusterOptions = { 
         maxClusterRadius: clusterRadius, 
         singleMarkerMode: true,
+        // Mobile-specific cluster optimizations
+        animate: !isMobile, // Disable cluster animations on mobile
+        animateAddingMarkers: !isMobile,
+        disableClusteringAtZoom: isMobile ? 18 : 19, // Disable clustering at higher zoom on mobile
+        spiderfyOnMaxZoom: !isMobile, // Disable spiderfy on mobile
+        showCoverageOnHover: !isMobile, // Disable coverage on mobile
+        // Optimize cluster creation
         iconCreateFunction: function(cluster) {
-            /* custom icon function, tweak default to add more alt text */
             var childCount = cluster.getChildCount();
             var csize;
             if (childCount < 10) {
@@ -119,10 +148,22 @@
                 csize = 'large';
             }
             var c = ' marker-cluster-' + csize;
-            return new L.DivIcon({ html: '<div><span class="visually-hidden">' + csize +' cluster of </span><span>' + childCount + '</span><span class="visually-hidden"> items</span></div>', className: 'marker-cluster' + c, iconSize: new L.Point(40, 40) });
+            return new L.DivIcon({ 
+                html: '<div><span class="visually-hidden">' + csize +' cluster of </span><span>' + childCount + '</span><span class="visually-hidden"> items</span></div>', 
+                className: 'marker-cluster' + c, 
+                iconSize: new L.Point(40, 40) 
+            });
         }
-        {% if site.data.theme.map-search == true %}, removeOutsideVisibleBounds: false{% endif %} 
-    });{% endif %}
+        {% if site.data.theme.map-search == true %}, removeOutsideVisibleBounds: !isMobile{% endif %} // Keep markers visible for search on desktop only
+    };
+    
+    if (isLowEndDevice) {
+        clusterOptions.maxClusterRadius = clusterRadius * 2; // Even larger clusters on low-end devices
+        clusterOptions.disableClusteringAtZoom = 16; // Earlier clustering disable
+    }
+    
+    var markers = L.markerClusterGroup(clusterOptions);
+    {% endif %}
 
     /* get icons function */ 
     {% include helpers/get-icon.js %}
@@ -168,12 +209,16 @@
         return marker;
     }
 
-    /* viewport-based marker rendering for performance */
+    /* enhanced viewport-based marker rendering with performance optimizations */
     function renderVisibleMarkers() {
         if (!map) return;
         
-        // Get current map bounds
+        // Get current map bounds with padding for smoother experience
         var bounds = map.getBounds();
+        if (isMobile) {
+            // Expand bounds on mobile to reduce re-rendering frequency
+            bounds = bounds.pad(0.2);
+        }
         
         // Remove existing markers
         {% if site.data.theme.map-cluster == true %}
@@ -185,40 +230,100 @@
         currentMarkers = [];
         {% endif %}
         
-        // Filter and add only visible features
+        // Filter visible features with mobile optimization
         var visibleFeatures = allFeatures.filter(function(feature) {
             var coords = feature.geometry.coordinates;
             return bounds.contains([coords[1], coords[0]]);
         });
         
-        // Create markers for visible features only
+        // Limit markers on mobile for performance
+        if (isMobile && visibleFeatures.length > 500) {
+            // Sort by distance from center and take closest 500
+            var center = map.getCenter();
+            visibleFeatures = visibleFeatures
+                .map(function(feature) {
+                    var coords = feature.geometry.coordinates;
+                    var distance = center.distanceTo([coords[1], coords[0]]);
+                    return { feature: feature, distance: distance };
+                })
+                .sort(function(a, b) { return a.distance - b.distance; })
+                .slice(0, 500)
+                .map(function(item) { return item.feature; });
+        }
+        
+        // Batch marker creation for better performance
+        var markersToAdd = [];
         visibleFeatures.forEach(function(feature) {
             var latlng = [feature.geometry.coordinates[1], feature.geometry.coordinates[0]];
             var marker = createOptimizedMarker(feature, latlng);
             
             objectPopups(feature, marker);
-            
-            {% if site.data.theme.map-cluster == true %}
-            markers.addLayer(marker);
-            {% else %}
+            markersToAdd.push(marker);
+        });
+        
+        // Add all markers at once for better performance
+        {% if site.data.theme.map-cluster == true %}
+        markers.addLayers(markersToAdd);
+        {% else %}
+        markersToAdd.forEach(function(marker) {
             marker.addTo(map);
             currentMarkers.push(marker);
-            {% endif %}
         });
+        {% endif %}
     }
 
     {% if site.data.theme.map-cluster == true %}
     map.addLayer(markers);
     {% endif %}
 
-    /* throttled re-rendering on map movement */
+    /* enhanced throttled re-rendering with mobile optimizations */
     var renderTimeout;
-    var moveTimeout;
+    var lastRenderTime = 0;
+    var renderDelay = isMobile ? 300 : 100; // Longer delay on mobile
     
-    map.on('moveend', function() {
-        clearTimeout(renderTimeout);
-        renderTimeout = setTimeout(renderVisibleMarkers, isMobile ? 200 : 100);
-    });
+    function throttledRender() {
+        var now = Date.now();
+        if (now - lastRenderTime < renderDelay) {
+            clearTimeout(renderTimeout);
+            renderTimeout = setTimeout(function() {
+                renderVisibleMarkers();
+                lastRenderTime = Date.now();
+            }, renderDelay);
+        } else {
+            renderVisibleMarkers();
+            lastRenderTime = now;
+        }
+    }
+    
+    map.on('moveend', throttledRender);
+    
+    // Add zoom end event for mobile optimization
+    if (isMobile) {
+        map.on('zoomend', function() {
+            clearTimeout(renderTimeout);
+            renderTimeout = setTimeout(renderVisibleMarkers, 150);
+        });
+    }
+
+    // Enhanced mobile touch optimization
+    if (isMobile) {
+        // Disable right-click context menu on mobile
+        map.on('contextmenu', function(e) {
+            e.originalEvent.preventDefault();
+        });
+        
+        // Optimize popup behavior on mobile
+        map.on('popupopen', function(e) {
+            // Close popup when map starts moving on mobile
+            map.on('movestart', function() {
+                map.closePopup();
+            });
+        });
+        
+        map.on('popupclose', function(e) {
+            map.off('movestart');
+        });
+    }
 
     {% if site.data.theme.auto-center-map == true %}
     /* if no location was specified in the URL query parameters, auto center the map */
