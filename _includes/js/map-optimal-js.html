@@ -103,7 +103,7 @@
 
     {% if site.data.theme.map-cluster == true %}
     /* create cluster group with mobile optimizations */
-    var clusterRadius = isMobile ? 25 : {{ site.data.theme.map-cluster-radius | default: 15 }};
+    var clusterRadius = {{ site.data.theme.map-cluster-radius | default: 15 }};
     var markers = L.markerClusterGroup({ 
         maxClusterRadius: clusterRadius, 
         singleMarkerMode: true,
