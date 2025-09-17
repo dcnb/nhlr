@@ -163,24 +163,8 @@
 
     /* optimized marker creation */
     function createOptimizedMarker(feature, latlng) {
-        var marker;
-        
-        if (isMobile) {
-            // Use simple circle markers on mobile for better performance
-            marker = L.circleMarker(latlng, {
-                radius: 6,
-                fillColor: '#ff7800',
-                color: '#000',
-                weight: 1,
-                opacity: 1,
-                fillOpacity: 0.8,
-                alt: feature.properties.title
-            });
-        } else {
-            // Use regular markers on desktop
-            marker = L.marker(latlng, {alt: feature.properties.title});
-        }
-        
+        // Use regular markers on all devices like the original
+        var marker = L.marker(latlng, {alt: feature.properties.title});
         return marker;
     }
 
