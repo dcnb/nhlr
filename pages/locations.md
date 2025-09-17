@@ -1,10 +1,10 @@
 ---
-title: Locations
+title: County
 layout: cloud
-permalink: /locations.html
+permalink: /county.html
 # Default locations page is configured in "_data/theme.yml"
 # leave cloud-fields as "site.data.theme.locations-fields"
-cloud-fields: site.data.theme.locations-fields
+cloud-fields: county
 ---
 
 ## Browse Locations
