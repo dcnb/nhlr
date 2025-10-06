@@ -26,6 +26,7 @@
         {% if item.format %}"format": {{ item.format | escape | jsonify }}, {%- endif -%}
         {% if item.image_alt_text %}"alt": {{ item.image_alt_text | escape | jsonify }}, {%- endif -%}
         {% if item.parentid %}"parent": {{ item.parentid | jsonify }}, {%- endif -%}
+        {% if item.status %}"status": {{ item.status | escape | jsonify }}, {%- endif -%}
         "title": {{ item.title | escape | jsonify }},
         "id": {{ item.objectid | jsonify }} 
     } }{% unless forloop.last %}, {% endunless %}{% endfor %}
@@ -140,7 +141,23 @@
         layer.bindPopup(popupTemplate);
     }
     function objectMarkers(feature,latlng) {
-        var marker = L.marker(latlng, {alt: feature.properties.title});
+        // Set color based on status
+        var markerColor = '#3388ff'; // default blue
+        if (feature.properties.status && feature.properties.status === "Removed") {
+            markerColor = '#ff3333'; // red for removed
+        }
+        
+        // Create circle marker with color
+        var marker = L.circleMarker(latlng, {
+            radius: 8,
+            fillColor: markerColor,
+            color: '#fff',
+            weight: 2,
+            opacity: 1,
+            fillOpacity: 0.8,
+            alt: feature.properties.title
+        });
+        
         {% if site.data.theme.map-cluster == true %}markers.addLayer(marker);{% endif %}
         return marker;
     }
@@ -163,7 +180,7 @@
         /* set map view based on URL parameters */
         map.setView(mapCenter, mapZoom);
     }
-    {% else %}
+    {% else %} 
     /* set map view based on configuration or URL parameters */
     map.setView(mapCenter, mapZoom);
     {% endif %}

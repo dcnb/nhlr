@@ -44,7 +44,7 @@
     var markerFilter = url.searchParams.get('marker') ? url.searchParams.get('marker') : "";
 
     /* init map with mobile optimizations */
-    var mapOptions = { preferCanvas: true }; // Use canvas for better mobile performance
+    var mapOptions = { preferCanvas: true };
     if (isMobile) {
         mapOptions.zoomAnimation = false;
         mapOptions.fadeAnimation = false;
@@ -121,11 +121,12 @@
     
     /* store marker sprites and their associated data */
     var markerSprites = [];
-    var markerData = new Map(); // Maps sprite to feature data
-
-    /* popup functionality */
-    var currentPopup = null;
+    var markerData = new Map();
     
+    /* store regular leaflet markers for popup handling */
+    var leafletMarkers = [];
+
+    /* create popup content function */
     function createPopupContent(feature) {
         var itemHref = `{{ '/items/' | relative_url }}${ feature.properties.parent ? feature.properties.parent + ".html#" + feature.properties.id : feature.properties.id + ".html"}`;
         var imgAlt = feature.properties.alt ? feature.properties.alt : feature.properties.title;
@@ -163,47 +164,39 @@
         const scale = utils.getScale();
         
         if (firstDraw) {
-            // Create all markers on first draw
+            // Create both PIXI sprites for performance and invisible Leaflet markers for popups
             geodata.features.forEach(function(feature, index) {
                 const coords = feature.geometry.coordinates;
                 const latLng = [coords[1], coords[0]];
                 const pixelCoords = project(latLng);
                 
+                // Create PIXI sprite for visual display
                 const markerSprite = new PIXI.Sprite(markerTexture);
                 markerSprite.anchor.set(0.5, 1);
                 markerSprite.x = pixelCoords.x;
                 markerSprite.y = pixelCoords.y;
                 markerSprite.scale.set(1 / scale);
-                
-                // Make marker interactive
                 markerSprite.interactive = true;
                 markerSprite.cursor = 'pointer';
                 
-                // Store feature data
-                markerData.set(markerSprite, feature);
-                
                 container.addChild(markerSprite);
                 markerSprites.push(markerSprite);
-            });
-            
-            // Add click handler for markers
-            container.on('click', function(event) {
-                const clickedSprite = event.target;
-                const feature = markerData.get(clickedSprite);
+                markerData.set(markerSprite, feature);
                 
-                if (feature) {
-                    const coords = feature.geometry.coordinates;
-                    const latLng = [coords[1], coords[0]];
-                    
-                    if (currentPopup) {
-                        map.closePopup(currentPopup);
-                    }
-                    
-                    currentPopup = L.popup()
-                        .setLatLng(latLng)
-                        .setContent(createPopupContent(feature))
-                        .openOn(map);
-                }
+                // Create invisible Leaflet marker for popup functionality
+                const leafletMarker = L.marker(latLng, {
+                    opacity: 0,
+                    interactive: false
+                }).addTo(map);
+                
+                const popupContent = createPopupContent(feature);
+                leafletMarker.bindPopup(popupContent);
+                leafletMarkers.push(leafletMarker);
+                
+                // Connect PIXI sprite click to Leaflet marker popup
+                markerSprite.on('click', function() {
+                    leafletMarker.openPopup();
+                });
             });
             
             firstDraw = false;
@@ -219,13 +212,11 @@
         
         renderer.render(container);
     }, pixiContainer, {
-        // Mobile-specific optimizations
-        doubleBuffering: isMobile, // Prevent flickering on iOS
-        forceCanvas: false, // Use WebGL when available
-        autoPreventDefault: false, // Let events flow to leaflet
-        destroyInteractionManager: false, // Keep interactions
-        shouldRedrawOnMove: function() { return false; }, // Only redraw on zoom
-        resolution: isMobile ? 1 : (window.devicePixelRatio || 1) // Optimize resolution for mobile
+        doubleBuffering: isMobile,
+        forceCanvas: false,
+        autoPreventDefault: false,
+        destroyInteractionManager: false,
+        shouldRedrawOnMove: function() { return false; }
     });
 
     /* add PIXI overlay to map */
@@ -273,21 +264,11 @@
     /* show popup if id in URL query */ 
     if (markerFilter != "") {
         setTimeout(function() {
-            const targetFeature = geodata.features.find(f => f.properties.id === markerFilter);
-            if (targetFeature) {
-                const coords = targetFeature.geometry.coordinates;
-                const latLng = [coords[1], coords[0]];
-                
-                if (currentPopup) {
-                    map.closePopup(currentPopup);
-                }
-                
-                currentPopup = L.popup()
-                    .setLatLng(latLng)
-                    .setContent(createPopupContent(targetFeature))
-                    .openOn(map);
-                
-                map.setView(latLng, Math.max(map.getZoom(), 12));
+            const markerIndex = geodata.features.findIndex(f => f.properties.id === markerFilter);
+            if (markerIndex >= 0 && leafletMarkers[markerIndex]) {
+                const coords = geodata.features[markerIndex].geometry.coordinates;
+                map.setView([coords[1], coords[0]], Math.max(map.getZoom(), 12));
+                leafletMarkers[markerIndex].openPopup();
             }
         }, 500);
     }
